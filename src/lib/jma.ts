@@ -1,14 +1,24 @@
-// Shared JMA logic for the browser app (index.html) and the Node CLI (report.mjs).
+// Shared JMA warning/forecast logic for the browser app and the Node CLI (scripts/report.ts).
 export const BASE = 'https://www.jma.go.jp/bosai';
 export const AREA_URL = `${BASE}/common/const/area.json`;
-export const warningUrl = (office) => `${BASE}/warning/data/warning/${office}.json`;
+export const warningUrl = (office: string) => `${BASE}/warning/data/warning/${office}.json`;
 // JMA has no forecast file for these offices; their forecast lives in the parent office's file.
-const FORECAST_OFFICE = { '014030': '014100', '460040': '460100' };
-export const forecastUrl = (office) => `${BASE}/forecast/data/forecast/${FORECAST_OFFICE[office] || office}.json`;
+const FORECAST_OFFICE: Record<string, string> = { '014030': '014100', '460040': '460100' };
+export const forecastUrl = (office: string) => `${BASE}/forecast/data/forecast/${FORECAST_OFFICE[office] || office}.json`;
+
+type LatLon = [number, number];
+export interface AreaEntry { name: string; enName: string; children?: string[] }
+export interface AreaJson { offices: Record<string, AreaEntry & { children: string[] }>; class10s: Record<string, AreaEntry> }
+export interface WarningJson {
+  reportDatetime: string;
+  headlineText?: string;
+  areaTypes?: { areas: { code: string; warnings?: { code?: string; status: string }[] }[] }[];
+}
+export type ForecastJson = { reportDatetime: string; timeSeries: { timeDefines: string[]; areas: { area: { code: string; name: string }; weathers?: string[] }[] }[] }[];
 
 // Approximate office centroids [lat, lon] (prefectural capital / main city of the office's region).
 // shortcut: point per office, not polygons; upgrade to JMA GIS shapefiles if area-level pins are needed.
-export const CENTROIDS = {
+export const CENTROIDS: Record<string, LatLon> = {
   '011000': [45.0, 142.0], '012000': [44.0, 142.2], '013000': [43.9, 144.0], '014030': [42.9, 143.2],
   '014100': [43.2, 144.8], '015000': [42.5, 142.0], '016000': [43.2, 141.4], '017000': [41.9, 140.3],
   '020000': [40.82, 140.74], '030000': [39.70, 141.15], '040000': [38.27, 140.87], '050000': [39.72, 140.10],
@@ -26,13 +36,13 @@ export const CENTROIDS = {
   '473000': [24.80, 125.28], '474000': [24.34, 124.16],
 };
 
-export function nearestOffice(lat, lon) {
-  const d = ([a, b]) => (a - lat) ** 2 + ((b - lon) * Math.cos(lat * Math.PI / 180)) ** 2;
+export function nearestOffice(lat: number, lon: number): string {
+  const d = ([a, b]: LatLon) => (a - lat) ** 2 + ((b - lon) * Math.cos(lat * Math.PI / 180)) ** 2;
   return Object.keys(CENTROIDS).reduce((best, k) => (d(CENTROIDS[k]) < d(CENTROIDS[best]) ? k : best));
 }
 
 // JMA warning codes → [Japanese, English]. Severity derives from the code range.
-export const CODES = {
+export const CODES: Record<string, [string, string]> = {
   '02': ['暴風雪警報', 'Snowstorm Warning'], '03': ['大雨警報', 'Heavy Rain Warning'], '04': ['洪水警報', 'Flood Warning'],
   '05': ['暴風警報', 'Storm Warning'], '06': ['大雪警報', 'Heavy Snow Warning'], '07': ['波浪警報', 'High Wave Warning'],
   '08': ['高潮警報', 'Storm Surge Warning'], '10': ['大雨注意報', 'Heavy Rain Advisory'], '12': ['大雪注意報', 'Heavy Snow Advisory'],
@@ -45,16 +55,21 @@ export const CODES = {
   '35': ['暴風特別警報', 'Storm Emergency Warning'], '36': ['大雪特別警報', 'Heavy Snow Emergency Warning'],
   '37': ['波浪特別警報', 'High Wave Emergency Warning'], '38': ['高潮特別警報', 'Storm Surge Emergency Warning'],
 };
-export const SEVERITY = { 3: 'special', 2: 'warning', 1: 'advisory', 0: 'none' };
-export const COLORS = { special: '#4b0082', warning: '#d7191c', advisory: '#f2c200', none: '#2b8a3e' };
-export const severityOf = (code) => (+code >= 30 ? 3 : +code >= 10 ? 1 : +code >= 2 ? 2 : 0);
-export const decode = (code) => CODES[code] || [`不明コード${code}`, `Unknown code ${code}`];
+export type Severity = 'special' | 'warning' | 'advisory' | 'none';
+export const SEVERITY: Severity[] = ['none', 'advisory', 'warning', 'special'];
+export const SEVERITY_LABEL: Record<Severity, string> = { special: '特別警報 Emergency', warning: '警報 Warning', advisory: '注意報 Advisory', none: '発表なし None' };
+// JMA's own map colours, so the pins read like jma.go.jp.
+export const COLORS: Record<Severity, string> = { special: '#0c000c', warning: '#ff2800', advisory: '#f2e700', none: '#8fbf9f' };
+export const severityOf = (code: string) => (+code >= 30 ? 3 : +code >= 10 ? 1 : +code >= 2 ? 2 : 0);
+export const decode = (code: string): [string, string] => CODES[code] || [`不明コード${code}`, `Unknown code ${code}`];
 
 const INACTIVE = new Set(['解除', '発表警報・注意報はなし']);
 
-// Active alerts at class10 (region) level: [{areaCode, areaName, areaEn, code, ja, en, status, severity}]
-export function parseWarnings(w, area) {
-  const out = [];
+export interface Alert { areaCode: string; areaName: string; areaEn: string; code: string; ja: string; en: string; status: string; severity: number }
+
+// Active alerts at class10 (region) level.
+export function parseWarnings(w: WarningJson, area: AreaJson): Alert[] {
+  const out: Alert[] = [];
   for (const a of w.areaTypes?.[0]?.areas || []) {
     const meta = area.class10s[a.code] || {};
     for (const x of a.warnings || []) {
@@ -66,37 +81,20 @@ export function parseWarnings(w, area) {
   return out.sort((p, q) => q.severity - p.severity || p.areaCode.localeCompare(q.areaCode));
 }
 
-// Short-term forecast: [{code, name, times, weathers}] from forecast[0].timeSeries[0] (today/tomorrow/day after).
-export function parseForecast(f) {
+export interface ForecastArea { code: string; name: string; times: string[]; weathers: string[] }
+
+// Short-term forecast from forecast[0].timeSeries[0] (today/tomorrow/day after).
+export function parseForecast(f: ForecastJson | null | undefined): ForecastArea[] {
   const ts = f?.[0]?.timeSeries?.[0];
   if (!ts) return [];
   return ts.areas.map((a) => ({ code: a.area.code, name: a.area.name, times: ts.timeDefines, weathers: a.weathers || [] }));
 }
 
-export const jst = (iso) => (iso ? new Date(iso).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false }) + ' JST' : '—');
-export const ageHours = (iso, now = Date.now()) => (now - new Date(iso)) / 3.6e6;
+export const jst = (iso?: string | null) => (iso ? new Date(iso).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', hour12: false }) + ' JST' : '—');
+export const ageHours = (iso: string, now = Date.now()) => (now - +new Date(iso)) / 3.6e6;
 
-export function toMarkdown({ office, area, warning, forecast, now = new Date() }) {
-  const o = area.offices[office];
-  const alerts = parseWarnings(warning, area);
-  const fc = parseForecast(forecast);
-  const age = ageHours(warning.reportDatetime, now);
-  const L = [];
-  L.push(`# JMA weather alerts: ${o.name} (${o.enName}) [${office}]`, '');
-  L.push(`Generated: ${jst(now.toISOString())}`, '');
-  L.push('## Sources', '');
-  L.push(`- Warnings: ${warningUrl(office)} (reportDatetime: ${warning.reportDatetime}, ${jst(warning.reportDatetime)})`);
-  L.push(`- Forecast: ${forecastUrl(office)} (reportDatetime: ${forecast?.[0]?.reportDatetime ?? 'n/a'}, ${jst(forecast?.[0]?.reportDatetime)})`);
-  L.push(`- Area codes: ${AREA_URL}`, '');
-  if (age > 24) L.push(`> **Stale data:** the warning feed was last updated ${Math.round(age / 24)} days ago. Check https://www.jma.go.jp/bosai/warning/ before relying on it.`, '');
-  L.push('## Headline', '', warning.headlineText || '(none)', '');
-  L.push(`## Active alerts (${alerts.length})`, '');
-  if (alerts.length) {
-    L.push('| Area | Code | Alert (JA) | Alert (EN) | Severity | Status | Report time (JST) |', '|---|---|---|---|---|---|---|');
-    for (const a of alerts) L.push(`| ${a.areaName} ${a.areaEn} (${a.areaCode}) | ${a.code} | ${a.ja} | ${a.en} | ${SEVERITY[a.severity]} | ${a.status} | ${jst(warning.reportDatetime)} |`);
-  } else L.push('No active warnings or advisories.');
-  L.push('', '## Forecast', '');
-  for (const f of fc) L.push(`- **${f.name}** (${f.code}): ${f.weathers.map((w, i) => `${jst(f.times[i])}: ${w.replace(/　/g, ' ')}`).join(' / ')}`);
-  if (!fc.length) L.push('Forecast unavailable.');
-  return L.join('\n') + '\n';
+export async function getJson<T>(url: string): Promise<T> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  return r.json();
 }

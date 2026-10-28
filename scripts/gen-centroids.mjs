@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Regenerates class10-centroids.json ({class10 code: [lat, lon]}) from JMA's class10 polygons: node gen-centroids.mjs
+// Regenerates class10-centroids.json ({class10 code: [lat, lon]}) from JMA's class10 polygons: npm run centroids
 import { writeFileSync } from 'node:fs';
-import { BASE } from './jma.js';
+const BASE = 'https://www.jma.go.jp/bosai';
 
 const geo = await (await fetch(`${BASE}/common/const/geojson/class10s.json`)).json();
 // Shoelace area and centroid of a polygon's outer ring, in lon/lat degrees (fine at this scale).
@@ -20,5 +20,5 @@ for (const { properties: { code }, geometry } of geo.features) {
   const c = polys.map((p) => ring(p[0])).reduce((m, r) => (r.a > m.a ? r : m));
   out[code] = [+c.lat.toFixed(3), +c.lon.toFixed(3)];
 }
-writeFileSync(new URL('./class10-centroids.json', import.meta.url), JSON.stringify(out) + '\n');
+writeFileSync(new URL('../public/class10-centroids.json', import.meta.url), JSON.stringify(out) + '\n');
 console.log(`${Object.keys(out).length} centroids written`);
